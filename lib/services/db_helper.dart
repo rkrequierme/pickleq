@@ -1,5 +1,6 @@
 import 'dart:convert';
-import 'dart:io';
+import 'dart:io' show Platform, Directory;
+import 'package:flutter/foundation.dart';
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -14,9 +15,36 @@ class DBHelper {
   factory DBHelper() => _instance;
   DBHelper._internal();
 
+  bool isWebOverride = false;
+  bool get isWeb => kIsWeb || isWebOverride;
+
   Database? _db;
 
+  // --- WEB DEMO IN-MEMORY STORAGE ---
+  static final List<Map<String, dynamic>> _webAdmins = [
+    {
+      'username': 'admin',
+      'password_hash': '240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9', // admin123 hash
+    }
+  ];
+
+  static final List<Player> _webPlayers = [];
+
+  static final List<Court> _webCourts = [
+    Court(id: 1, number: 1, name: 'Court 1', status: 'available'),
+    Court(id: 2, number: 2, name: 'Court 2', status: 'available'),
+    Court(id: 3, number: 3, name: 'Court 3', status: 'available'),
+    Court(id: 4, number: 4, name: 'Court 4', status: 'available'),
+  ];
+
+  static final List<MatchModel> _webMatches = [];
+  static Session? _webActiveSession;
+  static final List<Session> _webSessions = [];
+
   Future<Database> get database async {
+    if (isWeb) {
+      throw UnsupportedError("Cannot access SQLite database on web. Use web-in-memory fallback.");
+    }
     if (_db != null) return _db!;
     _db = await _initDatabase();
     return _db!;
@@ -29,9 +57,11 @@ class DBHelper {
 
   Future<Database> _initDatabase() async {
     // Initialize FFI for Windows desktop
-    if (Platform.isWindows || Platform.isLinux) {
-      sqfliteFfiInit();
-      databaseFactory = databaseFactoryFfi;
+    if (!isWeb) {
+      if (Platform.isWindows || Platform.isLinux) {
+        sqfliteFfiInit();
+        databaseFactory = databaseFactoryFfi;
+      }
     }
 
     final docsDir = await getApplicationDocumentsDirectory();
@@ -41,7 +71,7 @@ class DBHelper {
 
     return await openDatabase(
       dbPath,
-      version: 1,
+      version: 3,
       onCreate: (db, version) async {
         // Admins table
         await db.execute('''
@@ -59,7 +89,8 @@ class DBHelper {
             status TEXT NOT NULL, -- 'waiting', 'playing', 'absent', 'inactive'
             queue_joined_at TEXT, -- ISO8601 timestamp
             queue_position INTEGER, -- position order in queue
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            skill_level TEXT NOT NULL DEFAULT 'intermediate'
           )
         ''');
 
@@ -92,6 +123,7 @@ class DBHelper {
           CREATE TABLE match_players (
             match_id INTEGER NOT NULL,
             player_id INTEGER NOT NULL,
+            player_index INTEGER DEFAULT 0,
             PRIMARY KEY (match_id, player_id),
             FOREIGN KEY (match_id) REFERENCES matches (id) ON DELETE CASCADE,
             FOREIGN KEY (player_id) REFERENCES players (id) ON DELETE CASCADE
@@ -125,14 +157,36 @@ class DBHelper {
           });
         }
       },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          try {
+            await db.execute("ALTER TABLE players ADD COLUMN skill_level TEXT NOT NULL DEFAULT 'intermediate'");
+          } catch (e) {
+            debugPrint("Column skill_level already exists or failed to alter: $e");
+          }
+        }
+        if (oldVersion < 3) {
+          try {
+            await db.execute("ALTER TABLE match_players ADD COLUMN player_index INTEGER DEFAULT 0");
+          } catch (e) {
+            debugPrint("Column player_index already exists or failed to alter: $e");
+          }
+        }
+      },
     );
   }
 
   // --- ADMIN OPERATIONS ---
   
   Future<bool> authenticateAdmin(String username, String password) async {
-    final db = await database;
     final hashed = hashPassword(password);
+    if (isWeb) {
+      return _webAdmins.any((admin) =>
+          admin['username'].toString().toLowerCase() == username.trim().toLowerCase() &&
+          admin['password_hash'] == hashed);
+    }
+    
+    final db = await database;
     final results = await db.query(
       'admins',
       where: 'username = ? AND password_hash = ?',
@@ -142,8 +196,16 @@ class DBHelper {
   }
 
   Future<void> updateAdminPassword(String username, String newPassword) async {
-    final db = await database;
     final hashed = hashPassword(newPassword);
+    if (isWeb) {
+      final idx = _webAdmins.indexWhere((admin) => admin['username'] == username);
+      if (idx != -1) {
+        _webAdmins[idx]['password_hash'] = hashed;
+      }
+      return;
+    }
+
+    final db = await database;
     await db.update(
       'admins',
       {'password_hash': hashed},
@@ -155,11 +217,30 @@ class DBHelper {
   // --- PLAYER OPERATIONS ---
 
   Future<int> insertPlayer(Player player) async {
+    if (isWeb) {
+      int maxId = 0;
+      for (final p in _webPlayers) {
+        if ((p.id ?? 0) > maxId) maxId = p.id!;
+      }
+      final newId = maxId + 1;
+      final inserted = player.copyWith(id: newId);
+      _webPlayers.add(inserted);
+      return newId;
+    }
+
     final db = await database;
     return await db.insert('players', player.toMap());
   }
 
   Future<int> updatePlayer(Player player) async {
+    if (isWeb) {
+      final idx = _webPlayers.indexWhere((p) => p.id == player.id || p.name == player.name);
+      if (idx != -1) {
+        _webPlayers[idx] = player;
+      }
+      return 1;
+    }
+
     final db = await database;
     return await db.update(
       'players',
@@ -170,6 +251,11 @@ class DBHelper {
   }
 
   Future<int> deletePlayer(int id) async {
+    if (isWeb) {
+      _webPlayers.removeWhere((p) => p.id == id);
+      return 1;
+    }
+
     final db = await database;
     return await db.delete(
       'players',
@@ -179,12 +265,42 @@ class DBHelper {
   }
 
   Future<List<Player>> getAllPlayers() async {
+    if (isWeb) {
+      final list = List<Player>.from(_webPlayers);
+      list.sort((a, b) => a.name.compareTo(b.name));
+      return list;
+    }
+
     final db = await database;
     final maps = await db.query('players', orderBy: 'name ASC');
     return List.generate(maps.length, (i) => Player.fromMap(maps[i]));
   }
 
   Future<List<Player>> getWaitingQueue() async {
+    if (isWeb) {
+      final waiting = _webPlayers.where((p) => p.status == 'waiting').toList();
+      waiting.sort((a, b) {
+        if (a.queuePosition != null && b.queuePosition != null) {
+          final posComp = a.queuePosition!.compareTo(b.queuePosition!);
+          if (posComp != 0) return posComp;
+        } else if (a.queuePosition != null) {
+          return -1;
+        } else if (b.queuePosition != null) {
+          return 1;
+        }
+
+        if (a.queueJoinedAt != null && b.queueJoinedAt != null) {
+          return a.queueJoinedAt!.compareTo(b.queueJoinedAt!);
+        } else if (a.queueJoinedAt != null) {
+          return -1;
+        } else if (b.queueJoinedAt != null) {
+          return 1;
+        }
+        return a.createdAt.compareTo(b.createdAt);
+      });
+      return waiting;
+    }
+
     final db = await database;
     final maps = await db.query(
       'players',
@@ -195,8 +311,17 @@ class DBHelper {
     return List.generate(maps.length, (i) => Player.fromMap(maps[i]));
   }
 
-  // Helper to re-evaluate and save player queue positions sequentially
   Future<void> saveQueueOrder(List<Player> queue) async {
+    if (isWeb) {
+      for (int i = 0; i < queue.length; i++) {
+        final idx = _webPlayers.indexWhere((p) => p.id == queue[i].id || p.name == queue[i].name);
+        if (idx != -1) {
+          _webPlayers[idx] = _webPlayers[idx].copyWith(queuePosition: i);
+        }
+      }
+      return;
+    }
+
     final db = await database;
     final batch = db.batch();
     for (int i = 0; i < queue.length; i++) {
@@ -213,11 +338,30 @@ class DBHelper {
   // --- COURT OPERATIONS ---
 
   Future<int> insertCourt(Court court) async {
+    if (isWeb) {
+      int maxId = 0;
+      for (final c in _webCourts) {
+        if ((c.id ?? 0) > maxId) maxId = c.id!;
+      }
+      final newId = maxId + 1;
+      final inserted = court.copyWith(id: newId);
+      _webCourts.add(inserted);
+      return newId;
+    }
+
     final db = await database;
     return await db.insert('courts', court.toMap());
   }
 
   Future<int> updateCourt(Court court) async {
+    if (isWeb) {
+      final idx = _webCourts.indexWhere((c) => c.id == court.id);
+      if (idx != -1) {
+        _webCourts[idx] = court;
+      }
+      return 1;
+    }
+
     final db = await database;
     return await db.update(
       'courts',
@@ -228,6 +372,11 @@ class DBHelper {
   }
 
   Future<int> deleteCourt(int id) async {
+    if (isWeb) {
+      _webCourts.removeWhere((c) => c.id == id);
+      return 1;
+    }
+
     final db = await database;
     return await db.delete(
       'courts',
@@ -237,6 +386,12 @@ class DBHelper {
   }
 
   Future<List<Court>> getAllCourts() async {
+    if (isWeb) {
+      final list = List<Court>.from(_webCourts);
+      list.sort((a, b) => a.number.compareTo(b.number));
+      return list;
+    }
+
     final db = await database;
     final maps = await db.query('courts', orderBy: 'number ASC');
     return List.generate(maps.length, (i) => Court.fromMap(maps[i]));
@@ -245,30 +400,65 @@ class DBHelper {
   // --- MATCH OPERATIONS ---
 
   Future<int> startMatch(MatchModel match, List<Player> players) async {
+    if (isWeb) {
+      int maxId = 0;
+      for (final m in _webMatches) {
+        if ((m.id ?? 0) > maxId) maxId = m.id!;
+      }
+      final newMatchId = maxId + 1;
+
+      // Update player states in memory (Fallback match on ID or Name)
+      final updatedPlayers = <Player>[];
+      for (final player in players) {
+        final idx = _webPlayers.indexWhere((p) => p.id == player.id || p.name == player.name);
+        if (idx != -1) {
+          _webPlayers[idx] = _webPlayers[idx].copyWith(
+            status: 'playing',
+            queuePosition: null,
+            queueJoinedAt: null,
+          );
+          updatedPlayers.add(_webPlayers[idx]);
+        } else {
+          updatedPlayers.add(player);
+        }
+      }
+
+      // Update court status in memory
+      final courtIdx = _webCourts.indexWhere((c) => c.id == match.courtId);
+      if (courtIdx != -1) {
+        _webCourts[courtIdx] = _webCourts[courtIdx].copyWith(status: 'occupied');
+      }
+
+      final insertedMatch = match.copyWith(
+        id: newMatchId,
+        players: updatedPlayers,
+        courtName: courtIdx != -1 ? _webCourts[courtIdx].name : 'Court ${match.courtId}',
+      );
+      _webMatches.add(insertedMatch);
+      return newMatchId;
+    }
+
     final db = await database;
-    
-    // Use transaction to ensure consistency
     return await db.transaction<int>((txn) async {
-      // 1. Insert the match
       final matchId = await txn.insert('matches', match.toMap());
 
-      // 2. Insert match players
-      for (final player in players) {
+      for (int i = 0; i < players.length; i++) {
+        final player = players[i];
         await txn.insert('match_players', {
           'match_id': matchId,
           'player_id': player.id,
+          'player_index': i,
         });
 
-        // Update player status to 'playing'
+        // Update with ID or Name fallback to ensure updates happen
         await txn.update(
           'players',
           {'status': 'playing', 'queue_position': null, 'queue_joined_at': null},
-          where: 'id = ?',
-          whereArgs: [player.id],
+          where: 'id = ? OR name = ?',
+          whereArgs: [player.id, player.name],
         );
       }
 
-      // 3. Update court status to 'occupied'
       await txn.update(
         'courts',
         {'status': 'occupied'},
@@ -281,12 +471,55 @@ class DBHelper {
   }
 
   Future<void> endMatch(int matchId, int courtId, List<Player> players, int durationSeconds) async {
-    final db = await database;
+    if (isWeb) {
+      final courtIdx = _webCourts.indexWhere((c) => c.id == courtId);
+      if (courtIdx != -1) {
+        _webCourts[courtIdx] = _webCourts[courtIdx].copyWith(status: 'available');
+      }
 
+      final waiting = _webPlayers.where((p) => p.status == 'waiting').toList();
+      int nextPos = 0;
+      if (waiting.isNotEmpty) {
+        int maxPos = 0;
+        for (final p in waiting) {
+          if ((p.queuePosition ?? 0) > maxPos) maxPos = p.queuePosition!;
+        }
+        nextPos = maxPos + 1;
+      }
+
+      // Fallback matching by ID or Name
+      final updatedPlayers = <Player>[];
+      for (int i = 0; i < players.length; i++) {
+        final player = players[i];
+        final pIdx = _webPlayers.indexWhere((x) => x.id == player.id || x.name == player.name);
+        if (pIdx != -1) {
+          _webPlayers[pIdx] = _webPlayers[pIdx].copyWith(
+            status: 'waiting',
+            queueJoinedAt: DateTime.now(),
+            queuePosition: nextPos + i,
+          );
+          updatedPlayers.add(_webPlayers[pIdx]);
+        } else {
+          updatedPlayers.add(player);
+        }
+      }
+
+      final matchIdx = _webMatches.indexWhere((m) => m.id == matchId);
+      if (matchIdx != -1) {
+        _webMatches[matchIdx] = _webMatches[matchIdx].copyWith(
+          status: 'completed',
+          endedAt: DateTime.now(),
+          durationSeconds: durationSeconds,
+          players: updatedPlayers,
+        );
+      }
+      return;
+    }
+
+    final db = await database;
     await db.transaction((txn) async {
       final nowStr = DateTime.now().toIso8601String();
 
-      // 1. Update the match to completed
       await txn.update(
         'matches',
         {
@@ -298,7 +531,6 @@ class DBHelper {
         whereArgs: [matchId],
       );
 
-      // 2. Reset court to available
       await txn.update(
         'courts',
         {'status': 'available'},
@@ -306,8 +538,6 @@ class DBHelper {
         whereArgs: [courtId],
       );
 
-      // 3. Move players back to queue (fair rotation)
-      // Find current max queue position
       final List<Map<String, dynamic>> maxPosResult = await txn.rawQuery(
         'SELECT MAX(queue_position) as max_pos FROM players WHERE status = ?',
         ['waiting'],
@@ -319,11 +549,6 @@ class DBHelper {
 
       for (int i = 0; i < players.length; i++) {
         final player = players[i];
-        
-        // Wait, what if we also increment their games_played count?
-        // Since we don't have games_played in players table (we store it in matches/match_players history),
-        // we can count games dynamically from match history to generate reports, which is cleaner and less denormalized!
-        
         await txn.update(
           'players',
           {
@@ -331,16 +556,19 @@ class DBHelper {
             'queue_joined_at': nowStr,
             'queue_position': nextPos + i,
           },
-          where: 'id = ?',
-          whereArgs: [player.id],
+          where: 'id = ? OR name = ?',
+          whereArgs: [player.id, player.name],
         );
       }
     });
   }
 
   Future<List<MatchModel>> getActiveMatches() async {
+    if (isWeb) {
+      return _webMatches.where((m) => m.status == 'active').toList();
+    }
+
     final db = await database;
-    
     final matchMaps = await db.query(
       'matches',
       where: 'status = ?',
@@ -354,7 +582,6 @@ class DBHelper {
       final matchId = map['id'] as int;
       final courtId = map['court_id'] as int;
 
-      // Get court name
       final courtResults = await db.query(
         'courts',
         columns: ['name'],
@@ -363,11 +590,11 @@ class DBHelper {
       );
       final courtName = courtResults.isNotEmpty ? courtResults.first['name'] as String : 'Unknown Court';
 
-      // Get players
       final playerResults = await db.rawQuery('''
         SELECT p.* FROM players p
         INNER JOIN match_players mp ON p.id = mp.player_id
         WHERE mp.match_id = ?
+        ORDER BY mp.player_index ASC
       ''', [matchId]);
 
       final players = List.generate(playerResults.length, (i) => Player.fromMap(playerResults[i]));
@@ -383,8 +610,13 @@ class DBHelper {
   }
 
   Future<List<MatchModel>> getMatchHistory() async {
+    if (isWeb) {
+      final list = _webMatches.where((m) => m.status == 'completed').toList();
+      list.sort((a, b) => b.endedAt!.compareTo(a.endedAt!));
+      return list;
+    }
+
     final db = await database;
-    
     final matchMaps = await db.query(
       'matches',
       where: 'status = ?',
@@ -398,7 +630,6 @@ class DBHelper {
       final matchId = map['id'] as int;
       final courtId = map['court_id'] as int;
 
-      // Get court name
       final courtResults = await db.query(
         'courts',
         columns: ['name'],
@@ -407,11 +638,11 @@ class DBHelper {
       );
       final courtName = courtResults.isNotEmpty ? courtResults.first['name'] as String : 'Unknown Court';
 
-      // Get players
       final playerResults = await db.rawQuery('''
         SELECT p.* FROM players p
         INNER JOIN match_players mp ON p.id = mp.player_id
         WHERE mp.match_id = ?
+        ORDER BY mp.player_index ASC
       ''', [matchId]);
 
       final players = List.generate(playerResults.length, (i) => Player.fromMap(playerResults[i]));
@@ -429,6 +660,10 @@ class DBHelper {
   // --- SESSION OPERATIONS ---
 
   Future<Session?> getActiveSession() async {
+    if (isWeb) {
+      return _webActiveSession;
+    }
+
     final db = await database;
     final results = await db.query(
       'sessions',
@@ -440,6 +675,33 @@ class DBHelper {
   }
 
   Future<int> startSession(String date) async {
+    if (isWeb) {
+      int maxId = 0;
+      for (final s in _webSessions) {
+        if ((s.id ?? 0) > maxId) maxId = s.id!;
+      }
+      final newId = maxId + 1;
+      
+      final session = Session(
+        id: newId,
+        date: date,
+        startedAt: DateTime.now(),
+        isClosed: false,
+      );
+      _webSessions.add(session);
+      _webActiveSession = session;
+
+      // Make all registered players active waiting
+      for (int i = 0; i < _webPlayers.length; i++) {
+        _webPlayers[i] = _webPlayers[i].copyWith(
+          status: 'waiting',
+          queueJoinedAt: DateTime.now(),
+          queuePosition: i,
+        );
+      }
+      return newId;
+    }
+
     final db = await database;
     final nowStr = DateTime.now().toIso8601String();
     
@@ -451,11 +713,38 @@ class DBHelper {
   }
 
   Future<void> closeSession(int sessionId) async {
+    if (isWeb) {
+      if (_webActiveSession != null && _webActiveSession!.id == sessionId) {
+        final idx = _webSessions.indexWhere((s) => s.id == sessionId);
+        if (idx != -1) {
+          _webSessions[idx] = _webSessions[idx].copyWith(
+            isClosed: true,
+            endedAt: DateTime.now(),
+          );
+        }
+        _webActiveSession = null;
+      }
+
+      final active = _webMatches.where((m) => m.status == 'active').toList();
+      for (final m in active) {
+        final elapsedSeconds = DateTime.now().difference(m.startedAt).inSeconds;
+        await endMatch(m.id!, m.courtId, m.players, elapsedSeconds);
+      }
+
+      for (int i = 0; i < _webPlayers.length; i++) {
+        _webPlayers[i] = _webPlayers[i].copyWith(
+          status: 'inactive',
+          queueJoinedAt: null,
+          queuePosition: null,
+        );
+      }
+      return;
+    }
+
     final db = await database;
     final nowStr = DateTime.now().toIso8601String();
     
     await db.transaction((txn) async {
-      // 1. Update session to closed
       await txn.update(
         'sessions',
         {
@@ -466,13 +755,11 @@ class DBHelper {
         whereArgs: [sessionId],
       );
 
-      // 2. Put all active matches to completed (if any) and reset court/player statuses
       final activeMatches = await txn.query('matches', where: 'status = ?', whereArgs: ['active']);
       for (final matchMap in activeMatches) {
         final matchId = matchMap['id'] as int;
         final courtId = matchMap['court_id'] as int;
 
-        // Fetch duration
         final start = DateTime.parse(matchMap['started_at'] as String);
         final elapsedSeconds = DateTime.now().difference(start).inSeconds;
 
@@ -495,7 +782,6 @@ class DBHelper {
         );
       }
 
-      // 3. Reset all players to 'inactive' and clear queue states
       await txn.update('players', {
         'status': 'inactive',
         'queue_joined_at': null,
@@ -506,12 +792,27 @@ class DBHelper {
 
   // --- REPORT QUERIES ---
 
-  // Attendance Report (players who checked in or played games today)
   Future<List<Map<String, dynamic>>> getDailyAttendanceReport(String date) async {
+    if (isWeb) {
+      return _webPlayers.map((player) {
+        final gamesPlayed = _webMatches.where((m) {
+          return m.status == 'completed' && m.players.any((p) => p.id == player.id);
+        }).length;
+
+        return {
+          'id': player.id,
+          'name': player.name,
+          'status': player.status,
+          'created_at': player.createdAt.toIso8601String(),
+          'games_played': gamesPlayed,
+          'skill_level': player.skillLevel,
+        };
+      }).toList();
+    }
+
     final db = await database;
-    // Get players who joined the queue today or played in a match today
     final results = await db.rawQuery('''
-      SELECT DISTINCT p.id, p.name, p.status, p.created_at,
+      SELECT DISTINCT p.id, p.name, p.status, p.created_at, p.skill_level,
              (SELECT COUNT(*) FROM match_players mp 
               INNER JOIN matches m ON mp.match_id = m.id 
               WHERE mp.player_id = p.id AND m.status = 'completed' AND m.ended_at LIKE ?) as games_played
@@ -524,10 +825,22 @@ class DBHelper {
     return results;
   }
 
-  // Court Utilization Statistics
   Future<List<Map<String, dynamic>>> getCourtUtilizationStats(String date) async {
+    if (isWeb) {
+      return _webCourts.map((court) {
+        final courtMatches = _webMatches.where((m) => m.courtId == court.id && m.status == 'completed').toList();
+        final totalDuration = courtMatches.fold<int>(0, (sum, m) => sum + (m.durationSeconds ?? 0));
+        return {
+          'id': court.id,
+          'name': court.name,
+          'number': court.number,
+          'total_matches': courtMatches.length,
+          'total_duration_seconds': totalDuration,
+        };
+      }).toList();
+    }
+
     final db = await database;
-    
     final results = await db.rawQuery('''
       SELECT c.id, c.name, c.number,
              COUNT(m.id) as total_matches,
@@ -540,11 +853,22 @@ class DBHelper {
     return results;
   }
 
-  // Queue Activity report (Average wait time per hour)
   Future<List<Map<String, dynamic>>> getQueueActivityReport(String date) async {
+    if (isWeb) {
+      return _webMatches.where((m) => m.status == 'completed').map((m) {
+        return {
+          'id': m.id,
+          'court_id': m.courtId,
+          'type': m.type,
+          'started_at': m.startedAt.toIso8601String(),
+          'ended_at': m.endedAt?.toIso8601String(),
+          'duration_seconds': m.durationSeconds,
+          'status': m.status,
+        };
+      }).toList();
+    }
+
     final db = await database;
-    
-    // Return the list of matches completed today, with start time, end time, and duration
     final results = await db.query(
       'matches',
       where: "status = 'completed' AND ended_at LIKE ?",

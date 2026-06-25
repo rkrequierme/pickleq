@@ -37,18 +37,70 @@ class RotationEngine {
   }
 
   /// Recommends the next set of players for a match.
-  /// For singles, returns 2 players.
-  /// For doubles, returns 4 players.
-  /// If there aren't enough players, returns as many as available.
+  /// Balances based on skill level:
+  /// 1. Identifies the anchor (longest-waiting player in the queue).
+  /// 2. Prioritizes players of the EXACT SAME skill level.
+  /// 3. If needed, prioritizes players of ADJACENT skill levels.
+  /// 4. Falls back to wait-time order if not enough players are found.
   static List<Player> recommendPlayers({
     required List<Player> waitingQueue,
     required bool isDoubles,
   }) {
     final sorted = sortQueue(waitingQueue);
-    final count = isDoubles ? 4 : 2;
-    if (sorted.length <= count) {
+    if (sorted.isEmpty) return [];
+
+    final countRequired = isDoubles ? 4 : 2;
+    if (sorted.length <= countRequired) {
       return List<Player>.from(sorted);
     }
-    return sorted.sublist(0, count);
+
+    final recommendations = <Player>[];
+    final anchor = sorted[0];
+    recommendations.add(anchor);
+
+    // List of remaining players to choose from
+    final remaining = List<Player>.from(sorted.sublist(1));
+
+    // Pass 1: Match exact skill level (Beginner with Beginner, etc.)
+    final exactMatches = remaining.where((p) => p.skillLevel == anchor.skillLevel).toList();
+    for (final p in exactMatches) {
+      if (recommendations.length < countRequired) {
+        recommendations.add(p);
+        remaining.remove(p);
+      }
+    }
+
+    // Pass 2: Match adjacent skill levels if still needed
+    if (recommendations.length < countRequired) {
+      List<String> adjacentLevels;
+      if (anchor.skillLevel == 'beginner') {
+        adjacentLevels = ['intermediate'];
+      } else if (anchor.skillLevel == 'advanced') {
+        adjacentLevels = ['intermediate'];
+      } else {
+        // Intermediate can match with beginner or advanced
+        adjacentLevels = ['beginner', 'advanced'];
+      }
+
+      final adjacentMatches = remaining.where((p) => adjacentLevels.contains(p.skillLevel)).toList();
+      for (final p in adjacentMatches) {
+        if (recommendations.length < countRequired) {
+          recommendations.add(p);
+          remaining.remove(p);
+        }
+      }
+    }
+
+    // Pass 3: Fallback to absolute wait time
+    if (recommendations.length < countRequired) {
+      for (final p in List<Player>.from(remaining)) {
+        if (recommendations.length < countRequired) {
+          recommendations.add(p);
+          remaining.remove(p);
+        }
+      }
+    }
+
+    return recommendations;
   }
 }

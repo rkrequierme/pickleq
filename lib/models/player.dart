@@ -5,6 +5,7 @@ class Player {
   final DateTime? queueJoinedAt;
   final int? queuePosition;
   final DateTime createdAt;
+  final String skillLevel; // 'beginner', 'intermediate', 'advanced'
 
   Player({
     this.id,
@@ -13,6 +14,7 @@ class Player {
     this.queueJoinedAt,
     this.queuePosition,
     required this.createdAt,
+    this.skillLevel = 'intermediate',
   });
 
   Player copyWith({
@@ -22,6 +24,7 @@ class Player {
     DateTime? queueJoinedAt,
     int? queuePosition,
     DateTime? createdAt,
+    String? skillLevel,
   }) {
     return Player(
       id: id ?? this.id,
@@ -30,6 +33,7 @@ class Player {
       queueJoinedAt: queueJoinedAt ?? this.queueJoinedAt,
       queuePosition: queuePosition ?? this.queuePosition,
       createdAt: createdAt ?? this.createdAt,
+      skillLevel: skillLevel ?? this.skillLevel,
     );
   }
 
@@ -41,6 +45,7 @@ class Player {
       'queue_joined_at': queueJoinedAt?.toIso8601String(),
       'queue_position': queuePosition,
       'created_at': createdAt.toIso8601String(),
+      'skill_level': skillLevel,
     };
   }
 
@@ -54,11 +59,12 @@ class Player {
           : null,
       queuePosition: map['queue_position'] as int?,
       createdAt: DateTime.parse(map['created_at'] as String),
+      skillLevel: (map['skill_level'] as String?) ?? 'intermediate',
     );
   }
 
   @override
   String toString() {
-    return 'Player(id: $id, name: $name, status: $status, queueJoinedAt: $queueJoinedAt, queuePosition: $queuePosition)';
+    return 'Player(id: $id, name: $name, status: $status, skillLevel: $skillLevel, queuePosition: $queuePosition)';
   }
 }

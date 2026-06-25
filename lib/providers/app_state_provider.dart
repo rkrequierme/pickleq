@@ -135,7 +135,7 @@ class AppStateProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<bool> registerPlayer(String name) async {
+  Future<bool> registerPlayer(String name, [String skillLevel = 'intermediate']) async {
     if (name.trim().isEmpty) return false;
 
     // Check if player name already exists
@@ -157,6 +157,7 @@ class AppStateProvider extends ChangeNotifier {
         queueJoinedAt: _activeSession != null ? DateTime.now() : null,
         queuePosition: _activeSession != null ? nextPos : null,
         createdAt: DateTime.now(),
+        skillLevel: skillLevel,
       );
 
       await _dbHelper.insertPlayer(newPlayer);
@@ -352,6 +353,8 @@ class AppStateProvider extends ChangeNotifier {
     required String type,
     required List<Player> selectedPlayers,
   }) async {
+    final shuffledPlayers = List<Player>.from(selectedPlayers)..shuffle();
+
     final match = MatchModel(
       courtId: courtId,
       type: type,
@@ -359,7 +362,7 @@ class AppStateProvider extends ChangeNotifier {
       status: 'active',
     );
 
-    await _dbHelper.startMatch(match, selectedPlayers);
+    await _dbHelper.startMatch(match, shuffledPlayers);
     
     // Reload state
     await loadMatches();

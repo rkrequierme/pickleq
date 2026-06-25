@@ -15,6 +15,7 @@ class QueueView extends StatefulWidget {
 class _QueueViewState extends State<QueueView> {
   final _nameController = TextEditingController();
   final _scrollController = ScrollController();
+  String _selectedSkillLevel = 'intermediate';
   String? _errorText;
 
   @override
@@ -32,7 +33,7 @@ class _QueueViewState extends State<QueueView> {
       _errorText = null;
     });
 
-    // Check duplicate in memory first for quick warning
+    // Check duplicate in memory first
     final exists = appState.allPlayers.any(
       (p) => p.name.toLowerCase() == name.toLowerCase(),
     );
@@ -56,9 +57,12 @@ class _QueueViewState extends State<QueueView> {
       return;
     }
 
-    final success = await appState.registerPlayer(name);
+    final success = await appState.registerPlayer(name, _selectedSkillLevel);
     if (success) {
       _nameController.clear();
+      setState(() {
+        _selectedSkillLevel = 'intermediate'; // Reset dropdown
+      });
       _scrollToBottom();
     } else {
       setState(() {
@@ -77,6 +81,38 @@ class _QueueViewState extends State<QueueView> {
         );
       }
     });
+  }
+
+  Widget _buildSkillBadge(String skillLevel) {
+    Color badgeColor;
+    String label;
+    if (skillLevel == 'beginner') {
+      badgeColor = Colors.blue;
+      label = "BEG";
+    } else if (skillLevel == 'advanced') {
+      badgeColor = Colors.orange;
+      label = "ADV";
+    } else {
+      badgeColor = Colors.green;
+      label = "INT";
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: badgeColor.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: badgeColor.withOpacity(0.25), width: 1),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 8,
+          fontWeight: FontWeight.bold,
+          color: badgeColor,
+        ),
+      ),
+    );
   }
 
   @override
@@ -102,7 +138,7 @@ class _QueueViewState extends State<QueueView> {
                 const Text(
                   "PLAYER REGISTRATION",
                   style: TextStyle(
-                    fontFamily: 'Outfit',
+                    fontFamily: 'Inter',
                     fontSize: 14,
                     fontWeight: FontWeight.bold,
                     color: AppTheme.textSecondary,
@@ -117,7 +153,7 @@ class _QueueViewState extends State<QueueView> {
                       const Text(
                         "Register New Player",
                         style: TextStyle(
-                          fontFamily: 'Outfit',
+                          fontFamily: 'Inter',
                           fontSize: 16,
                           fontWeight: FontWeight.bold,
                         ),
@@ -138,6 +174,26 @@ class _QueueViewState extends State<QueueView> {
                         onSubmitted: (_) => _addPlayer(appState),
                       ),
                       const SizedBox(height: 16),
+                      // Skill level dropdown selector
+                      DropdownButtonFormField<String>(
+                        value: _selectedSkillLevel,
+                        items: const [
+                          DropdownMenuItem(value: 'beginner', child: Text("Beginner")),
+                          DropdownMenuItem(value: 'intermediate', child: Text("Intermediate")),
+                          DropdownMenuItem(value: 'advanced', child: Text("Advanced")),
+                        ],
+                        onChanged: (val) {
+                          if (val != null) {
+                            setState(() {
+                              _selectedSkillLevel = val;
+                            });
+                          }
+                        },
+                        decoration: const InputDecoration(
+                          labelText: "Skill Level",
+                        ),
+                      ),
+                      const SizedBox(height: 20),
                       ElevatedButton.icon(
                         onPressed: () => _addPlayer(appState),
                         icon: const Icon(Icons.person_add_alt_1, size: 18),
@@ -154,7 +210,7 @@ class _QueueViewState extends State<QueueView> {
                 const Text(
                   "INACTIVE / ABSENT REGISTRY",
                   style: TextStyle(
-                    fontFamily: 'Outfit',
+                    fontFamily: 'Inter',
                     fontSize: 14,
                     fontWeight: FontWeight.bold,
                     color: AppTheme.textSecondary,
@@ -185,16 +241,25 @@ class _QueueViewState extends State<QueueView> {
                                     child: Column(
                                       crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
-                                        Text(
-                                          player.name,
-                                          style: const TextStyle(
-                                            fontFamily: 'Outfit',
-                                            fontSize: 14,
-                                            fontWeight: FontWeight.w600,
-                                            color: AppTheme.textPrimary,
-                                          ),
-                                          overflow: TextOverflow.ellipsis,
+                                        Row(
+                                          children: [
+                                            Expanded(
+                                              child: Text(
+                                                player.name,
+                                                style: const TextStyle(
+                                                  fontFamily: 'Inter',
+                                                  fontSize: 14,
+                                                  fontWeight: FontWeight.bold,
+                                                  color: AppTheme.textPrimary,
+                                                ),
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                            ),
+                                            const SizedBox(width: 6),
+                                            _buildSkillBadge(player.skillLevel),
+                                          ],
                                         ),
+                                        const SizedBox(height: 2),
                                         Text(
                                           player.status.toUpperCase(),
                                           style: TextStyle(
@@ -212,7 +277,6 @@ class _QueueViewState extends State<QueueView> {
                                   Row(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
-                                      // Re-add Button
                                       IconButton(
                                         icon: const Icon(Icons.add_circle_outline, size: 18, color: AppTheme.neonLime),
                                         tooltip: 'Check In / Add to Queue',
@@ -220,7 +284,6 @@ class _QueueViewState extends State<QueueView> {
                                           appState.changePlayerStatus(player.id!, 'waiting');
                                         },
                                       ),
-                                      // Delete Button
                                       IconButton(
                                         icon: const Icon(Icons.delete_forever, size: 18, color: AppTheme.coralRed),
                                         tooltip: 'Delete Player Permanently',
@@ -252,7 +315,7 @@ class _QueueViewState extends State<QueueView> {
                     Text(
                       "ACTIVE WAITING QUEUE (${appState.waitingQueue.length})",
                       style: const TextStyle(
-                        fontFamily: 'Outfit',
+                        fontFamily: 'Inter',
                         fontSize: 14,
                         fontWeight: FontWeight.bold,
                         color: AppTheme.textSecondary,
@@ -262,7 +325,6 @@ class _QueueViewState extends State<QueueView> {
                     if (appState.waitingQueue.isNotEmpty)
                       TextButton.icon(
                         onPressed: () {
-                          // Skip all/re-evaluate
                           _showClearQueueConfirm(context, appState);
                         },
                         icon: const Icon(Icons.clear_all, size: 16),
@@ -284,7 +346,7 @@ class _QueueViewState extends State<QueueView> {
                                 Text(
                                   "Queue is empty",
                                   style: TextStyle(
-                                    fontFamily: 'Outfit',
+                                    fontFamily: 'Inter',
                                     fontWeight: FontWeight.bold,
                                     fontSize: 18,
                                     color: AppTheme.textPrimary,
@@ -313,7 +375,6 @@ class _QueueViewState extends State<QueueView> {
                               index: index,
                               onSkip: () => appState.skipPlayer(player.id!),
                               onRemove: () {
-                                // Mark as absent rather than delete
                                 appState.changePlayerStatus(player.id!, 'absent');
                               },
                               onMoveUp: index > 0

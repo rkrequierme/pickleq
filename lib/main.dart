@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:flutter/foundation.dart';
 import 'providers/app_state_provider.dart';
 import 'theme/app_theme.dart';
 import 'views/login_view.dart';
@@ -11,9 +12,11 @@ void main() {
   WidgetsFlutterBinding.ensureInitialized();
 
   // Initialize SQLite FFI database factory for desktop applications
-  if (Platform.isWindows || Platform.isLinux) {
-    sqfliteFfiInit();
-    databaseFactory = databaseFactoryFfi;
+  if (!kIsWeb) {
+    if (Platform.isWindows || Platform.isLinux) {
+      sqfliteFfiInit();
+      databaseFactory = databaseFactoryFfi;
+    }
   }
 
   runApp(const MyApp());

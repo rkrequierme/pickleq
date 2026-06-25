@@ -16,6 +16,70 @@ class MatchView extends StatefulWidget {
 }
 
 class _MatchViewState extends State<MatchView> {
+  Widget _buildSkillBadge(String skillLevel) {
+    Color badgeColor;
+    String label;
+    if (skillLevel == 'beginner') {
+      badgeColor = Colors.blue;
+      label = "BEG";
+    } else if (skillLevel == 'advanced') {
+      badgeColor = Colors.orange;
+      label = "ADV";
+    } else {
+      badgeColor = Colors.green;
+      label = "INT";
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: badgeColor.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: badgeColor.withOpacity(0.25), width: 1),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 8,
+          fontWeight: FontWeight.bold,
+          color: badgeColor,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPlayerTeamItem(Player player) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2.0),
+      child: Row(
+        children: [
+          const Icon(Icons.person, size: 14, color: AppTheme.textSecondary),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    player.name,
+                    style: const TextStyle(
+                      fontFamily: 'Outfit',
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: AppTheme.textPrimary,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                _buildSkillBadge(player.skillLevel),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   bool _isDoubles = true; // Default to doubles (4 players)
   int? _selectedCourtId;
   List<Player> _selectedPlayers = [];
@@ -122,6 +186,7 @@ class _MatchViewState extends State<MatchView> {
     final appState = Provider.of<AppStateProvider>(context);
     final availableCourts = appState.courts.where((c) => c.status == 'available').toList();
     final requiredCount = _isDoubles ? 4 : 2;
+    final recommendedPlayers = appState.getSuggestedPlayers(_isDoubles);
 
     return Padding(
       padding: const EdgeInsets.all(32.0),
@@ -317,7 +382,7 @@ class _MatchViewState extends State<MatchView> {
                               itemBuilder: (context, index) {
                                 final player = appState.waitingQueue[index];
                                 final isSelected = _selectedPlayers.any((p) => p.id == player.id);
-                                final isRecommendation = index < requiredCount;
+                                final isRecommendation = recommendedPlayers.any((p) => p.id == player.id);
 
                                 return CheckboxListTile(
                                   value: isSelected,
@@ -325,12 +390,20 @@ class _MatchViewState extends State<MatchView> {
                                   checkColor: Colors.black,
                                   title: Row(
                                     children: [
-                                      Text(
-                                        player.name,
-                                        style: TextStyle(
-                                          color: isSelected ? AppTheme.textPrimary : AppTheme.textSecondary,
-                                          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                          fontFamily: 'Outfit',
+                                      Expanded(
+                                        child: Row(
+                                          children: [
+                                            Text(
+                                              player.name,
+                                              style: TextStyle(
+                                                color: isSelected ? AppTheme.textPrimary : AppTheme.textSecondary,
+                                                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                                fontFamily: 'Outfit',
+                                              ),
+                                            ),
+                                            const SizedBox(width: 8),
+                                            _buildSkillBadge(player.skillLevel),
+                                          ],
                                         ),
                                       ),
                                       if (isRecommendation) ...[
@@ -488,34 +561,62 @@ class _MatchViewState extends State<MatchView> {
                                   ),
                                   const SizedBox(height: 16),
                                   Expanded(
-                                    child: ListView.builder(
-                                      shrinkWrap: true,
-                                      physics: const NeverScrollableScrollPhysics(),
-                                      itemCount: match.players.length,
-                                      itemBuilder: (context, pIdx) {
-                                        return Padding(
-                                          padding: const EdgeInsets.symmetric(vertical: 2.0),
-                                          child: Row(
+                                    child: match.players.length == 4
+                                        ? Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
                                             children: [
-                                              const Icon(Icons.person, size: 14, color: AppTheme.textSecondary),
-                                              const SizedBox(width: 8),
-                                              Expanded(
-                                                child: Text(
-                                                  match.players[pIdx].name,
-                                                  style: const TextStyle(
-                                                    fontFamily: 'Outfit',
-                                                    fontSize: 14,
-                                                    fontWeight: FontWeight.w600,
-                                                    color: AppTheme.textPrimary,
+                                              _buildPlayerTeamItem(match.players[0]),
+                                              _buildPlayerTeamItem(match.players[1]),
+                                              const Padding(
+                                                padding: EdgeInsets.symmetric(vertical: 4.0),
+                                                child: Center(
+                                                  child: Text(
+                                                    "— VS —",
+                                                    style: TextStyle(
+                                                      fontFamily: 'Outfit',
+                                                      fontSize: 10,
+                                                      fontWeight: FontWeight.bold,
+                                                      color: AppTheme.neonLime,
+                                                      letterSpacing: 1.5,
+                                                    ),
                                                   ),
-                                                  overflow: TextOverflow.ellipsis,
                                                 ),
                                               ),
+                                              _buildPlayerTeamItem(match.players[2]),
+                                              _buildPlayerTeamItem(match.players[3]),
                                             ],
-                                          ),
-                                        );
-                                      },
-                                    ),
+                                          )
+                                        : match.players.length == 2
+                                            ? Column(
+                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                children: [
+                                                  _buildPlayerTeamItem(match.players[0]),
+                                                  const Padding(
+                                                    padding: EdgeInsets.symmetric(vertical: 4.0),
+                                                    child: Center(
+                                                      child: Text(
+                                                        "— VS —",
+                                                        style: TextStyle(
+                                                          fontFamily: 'Outfit',
+                                                          fontSize: 10,
+                                                          fontWeight: FontWeight.bold,
+                                                          color: AppTheme.neonLime,
+                                                          letterSpacing: 1.5,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                  _buildPlayerTeamItem(match.players[1]),
+                                                ],
+                                              )
+                                            : ListView.builder(
+                                                shrinkWrap: true,
+                                                physics: const NeverScrollableScrollPhysics(),
+                                                itemCount: match.players.length,
+                                                itemBuilder: (context, pIdx) {
+                                                  return _buildPlayerTeamItem(match.players[pIdx]);
+                                                },
+                                              ),
                                   ),
                                   const SizedBox(height: 12),
                                   Row(
